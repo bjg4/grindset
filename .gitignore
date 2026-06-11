@@ -1,0 +1,8 @@
+# compiled binary + signature (Info.plist stays — it's source)
+Awake.app/Contents/MacOS/Awake
+Awake.app/Contents/_CodeSignature/
+
+# impeccable critique snapshots
+.impeccable/
+
+.DS_Store
