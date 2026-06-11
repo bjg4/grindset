@@ -1,6 +1,7 @@
 import Cocoa
 import AVFoundation
 import UserNotifications
+import IOKit.ps
 
 // Borderless panels refuse key status by default; we need it for Esc-to-close.
 final class BreakPanel: NSPanel {
@@ -38,6 +39,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var welcomePopover: NSPopover?
     var notificationAuthRequested = false
     var tickTimer: Timer?
+    var powerSourceRunLoopSource: CFRunLoopSource?
 
     var isAwake: Bool { caffeinate?.isRunning == true }
 
@@ -50,6 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         lidSleepDisabled = Self.systemSleepDisabled()
 
         installSigtermHandler()
+        installPowerSourceObserver()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -293,11 +296,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Session tick (menu bar countdown + battery guard)
 
+    // The 30s tick only feeds the menu bar countdown text; battery is
+    // event-driven via IOKit, no polling.
     func startTick() {
         guard tickTimer == nil else { return }
         let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             self?.updateIcon()
-            self?.checkBatteryGuard()
         }
         t.tolerance = 5
         RunLoop.main.add(t, forMode: .common)
@@ -309,18 +313,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         tickTimer = nil
     }
 
+    // macOS calls us on every power-source change (plug/unplug, charge level),
+    // so the guard reacts instantly and costs nothing in between.
+    func installPowerSourceObserver() {
+        let callback: IOPowerSourceCallbackType = { context in
+            guard let context else { return }
+            Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue().checkBatteryGuard()
+        }
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        guard let source = IOPSNotificationCreateRunLoopSource(callback, context)?.takeRetainedValue() else { return }
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        powerSourceRunLoopSource = source
+    }
+
     func batteryStatus() -> (onBattery: Bool, percent: Int)? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
-        p.arguments = ["-g", "batt"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        do { try p.run() } catch { return nil }
-        p.waitUntilExit()
-        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        guard let pctRange = out.range(of: #"(\d+)%"#, options: .regularExpression),
-              let pct = Int(out[pctRange].dropLast()) else { return nil }
-        return (out.contains("'Battery Power'"), pct)
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
+        let providing = IOPSGetProvidingPowerSourceType(blob)?.takeUnretainedValue() as String?
+        let onBattery = providing == kIOPSBatteryPowerValue
+        for source in sources {
+            guard let desc = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() as? [String: Any],
+                  let capacity = desc[kIOPSCurrentCapacityKey] as? Int,
+                  let maxCapacity = desc[kIOPSMaxCapacityKey] as? Int, maxCapacity > 0 else { continue }
+            return (onBattery, capacity * 100 / maxCapacity)
+        }
+        return nil // desktop Mac: no battery to guard
     }
 
     // Keeping an unplugged laptop awake until it dies is the one way this app
