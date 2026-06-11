@@ -9,7 +9,8 @@ A tiny macOS menu bar app that keeps your Mac awake — with a webcam mirror and
 - **Stay Awake When Lid Closes** — flips `pmset disablesleep` (asks for your admin password); restored automatically on quit
 - **Coffee Break** — a small floating, mirrored webcam panel to check how you look before a call
 - **Photo Booth** — camera button in the Coffee Break panel: 3·2·1 countdown, flash, photo saved to your Desktop
-- Timed sessions notify you when they end
+- Timed sessions show remaining time next to the cup ("☕ 47m") and notify you when they end
+- **Battery guard** — on battery at ≤10%, Awake stops the session and tells you, instead of keeping your Mac awake until it dies
 
 ## Safety promises
 

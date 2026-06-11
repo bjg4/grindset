@@ -37,6 +37,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var snapButton: NSButton?
     var welcomePopover: NSPopover?
     var notificationAuthRequested = false
+    var tickTimer: Timer?
 
     var isAwake: Bool { caffeinate?.isRunning == true }
 
@@ -212,16 +213,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return "Sleeping normally"
     }
 
+    // "47m" / "1h 12m" beside the cup during timed sessions — the icon answers
+    // "am I awake?"; this answers "for how much longer?".
+    func remainingText() -> String? {
+        guard isAwake, let ends = sessionEndsAt else { return nil }
+        let mins = max(0, Int(ceil(ends.timeIntervalSinceNow / 60)))
+        return mins >= 60 ? "\(mins / 60)h \(mins % 60)m" : "\(mins)m"
+    }
+
     func updateIcon() {
         let name = isAwake ? "cup.and.saucer.fill" : "cup.and.saucer"
-        let stateLabel = isAwake ? "Awake — keeping your Mac awake" : "Awake — sleeping normally"
+        var stateLabel = isAwake ? "Awake — keeping your Mac awake" : "Awake — sleeping normally"
+        let remaining = remainingText()
+        if let remaining { stateLabel += ", \(remaining) remaining" }
         if let img = NSImage(systemSymbolName: name, accessibilityDescription: stateLabel) {
             img.isTemplate = true
             statusItem.button?.image = img
-            statusItem.button?.title = ""
+            statusItem.button?.imagePosition = remaining == nil ? .imageOnly : .imageLeft
+            statusItem.button?.title = remaining.map { " " + $0 } ?? ""
         } else {
             statusItem.button?.image = nil
-            statusItem.button?.title = isAwake ? "☕︎" : "○"
+            statusItem.button?.title = (isAwake ? "☕︎" : "○") + (remaining.map { " " + $0 } ?? "")
         }
         statusItem.button?.setAccessibilityLabel(stateLabel)
     }
@@ -270,12 +282,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             t.tolerance = min(30, duration * 0.02)
             RunLoop.main.add(t, forMode: .common) // fires even while menu is open
             sessionTimer = t
-            if !notificationAuthRequested {
-                notificationAuthRequested = true
-                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-            }
         }
+        if !notificationAuthRequested {
+            notificationAuthRequested = true
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
+        startTick()
         updateIcon()
+    }
+
+    // MARK: - Session tick (menu bar countdown + battery guard)
+
+    func startTick() {
+        guard tickTimer == nil else { return }
+        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            self?.updateIcon()
+            self?.checkBatteryGuard()
+        }
+        t.tolerance = 5
+        RunLoop.main.add(t, forMode: .common)
+        tickTimer = t
+    }
+
+    func stopTick() {
+        tickTimer?.invalidate()
+        tickTimer = nil
+    }
+
+    func batteryStatus() -> (onBattery: Bool, percent: Int)? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        p.arguments = ["-g", "batt"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        do { try p.run() } catch { return nil }
+        p.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard let pctRange = out.range(of: #"(\d+)%"#, options: .regularExpression),
+              let pct = Int(out[pctRange].dropLast()) else { return nil }
+        return (out.contains("'Battery Power'"), pct)
+    }
+
+    // Keeping an unplugged laptop awake until it dies is the one way this app
+    // can genuinely hurt — stop the session before that happens.
+    func checkBatteryGuard() {
+        guard isAwake, let status = batteryStatus(), status.onBattery, status.percent <= 10 else { return }
+        stopAwake()
+        NSSound(named: "Glass")?.play()
+        let content = UNMutableNotificationContent()
+        content.title = "Battery low — letting your Mac sleep"
+        content.body = lidSleepDisabled
+            ? "Awake stopped at \(status.percent)%. Heads up: lid-close sleep is still disabled."
+            : "Awake stopped keeping your Mac awake at \(status.percent)%."
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
     // The timer ending a session is the most consequential state change the app
@@ -301,6 +361,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         sessionTimer?.invalidate()
         sessionTimer = nil
         sessionEndsAt = nil
+        stopTick()
     }
 
     // MARK: - Lid sleep (pmset disablesleep)
