@@ -18,26 +18,26 @@ Sleep state is system-global, so Grindset is paranoid about never leaving your M
 
 - caffeinate is spawned with `-w <pid>` — it dies with the app, even on a crash or force-quit
 - The real `pmset` state is read at launch, so an orphaned `disablesleep=1` from a crash heals on the next normal quit
-- Quitting with lid-override on prompts to restore it; cancelling the password prompt blocks a silent dirty exit
-- Logout/shutdown (SIGTERM) does non-interactive cleanup — no password dialogs that stall logout
+- Quitting normally with lid-override on prompts to restore it; cancelling the password prompt blocks a silent dirty exit
+- Logout/shutdown (SIGTERM) does non-interactive cleanup — no password dialogs that stall logout. The lid override can't be restored interactively there; Grindset re-syncs at next launch and restores on your next normal quit
+- Grindset only restores a `disablesleep` it set itself — if you run clamshell mode deliberately, it won't touch your setting
 
 If things ever do get stuck: `sudo pmset -a disablesleep 0`
 
-## Build
+## Install: build it yourself
 
-No Xcode project — just `swiftc`:
+**Building from source is the only supported install.** This app asks for your admin password and camera access — you should compile the binary you're granting that to. No Xcode project needed, just `swiftc`:
 
 ```bash
-swiftc -O -parse-as-library main.swift -o Grindset.app/Contents/MacOS/Grindset
+mkdir -p Grindset.app/Contents/MacOS
+swiftc -O -parse-as-library -target arm64-apple-macos13.0 main.swift -o Grindset.app/Contents/MacOS/Grindset
 codesign --force --sign - Grindset.app
 open Grindset.app
 ```
 
-Requires macOS 13+. Camera and Desktop access are requested on first use; the lid override asks for your admin password each time.
+On an Intel Mac, use `-target x86_64-apple-macos13.0` instead. Requires macOS 13+. Camera and Desktop access are requested on first use; the lid override asks for your admin password each time.
 
-## Gatekeeper note
-
-The app is ad-hoc signed. If you download a built copy (rather than building it yourself), macOS will refuse to open it normally — **right-click the app → Open → Open** the first time. Rebuilding locally re-signs it for your machine and may re-trigger the camera/Desktop permission prompts.
+**Please don't pass around prebuilt copies.** The app is ad-hoc signed: a downloaded copy is quarantined and won't open normally (on macOS 15+ even right-click → Open no longer bypasses this — you'd have to dig into System Settings → Privacy & Security → "Open Anyway"), it only runs on the architecture it was built on, and an unsigned binary that habitually prompts for admin is exactly what you shouldn't teach people to trust. Proper distribution would need a paid Apple Developer ID plus notarization. Until then: share the repo link, not the .app.
 
 ## License
 

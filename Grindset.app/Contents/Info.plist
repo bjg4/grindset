@@ -21,6 +21,12 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Coffee Break shows your webcam so you can check how you look.</string>
+	<string>Coffee Break shows your webcam as a mirror and can take a photo that is saved to your Desktop.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Coffee Break saves the photos you take to your Desktop.</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Blake Graham. MIT License.</string>
 </dict>
 </plist>

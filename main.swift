@@ -4,6 +4,8 @@ import UserNotifications
 import IOKit.ps
 
 // Borderless panels refuse key status by default; we need it for Esc-to-close.
+// Esc only reaches us while the panel is key (most recently clicked); when
+// another app is active, the ✕ button is the reliable close affordance.
 final class BreakPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override func cancelOperation(_ sender: Any?) {
@@ -29,7 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var sessionEndsAt: Date?
     var lidSleepDisabled = false
     var sigtermSource: DispatchSourceSignal?
-    var breakPanel: NSPanel?
+    var breakPanel: BreakPanel?
     var captureSession: AVCaptureSession?
     var clickOutsideMonitor: Any?
     var photoOutput: AVCapturePhotoOutput?
@@ -41,15 +43,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var tickTimer: Timer?
     var powerSourceRunLoopSource: CFRunLoopSource?
 
+    // Also documented in README ("≤10%") — keep the two in sync.
+    let batteryGuardPercent = 10
+
+    // Tracks whether Grindset (not the user or another tool) set disablesleep=1.
+    static let ownsDisableSleepKey = "grindsetSetDisableSleep"
+
     var isAwake: Bool { caffeinate?.isRunning == true }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         exitIfAlreadyRunning()
 
-        // Reflect the real pmset state at launch. A crash or kill -9 can't run
-        // the quit-time restore, so disablesleep=1 may be orphaned system-wide;
-        // syncing here means the next normal quit heals it.
-        lidSleepDisabled = Self.systemSleepDisabled()
+        // Reflect the real pmset state at launch — but only adopt (and later
+        // restore) a disablesleep WE set. A user who configured clamshell mode
+        // deliberately shouldn't have Grindset revert it at quit. The ownership
+        // flag persists across crashes, so kill -9 orphans still heal.
+        let systemDisabled = Self.systemSleepDisabled()
+        if !systemDisabled {
+            UserDefaults.standard.set(false, forKey: Self.ownsDisableSleepKey)
+        }
+        lidSleepDisabled = systemDisabled && UserDefaults.standard.bool(forKey: Self.ownsDisableSleepKey)
 
         installSigtermHandler()
         installPowerSourceObserver()
@@ -111,6 +124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Two instances would fight over the single global disablesleep value.
     func exitIfAlreadyRunning() {
+        // Fallback for bare-binary runs without Info.plist — keep in sync with CFBundleIdentifier.
         let bundleID = Bundle.main.bundleIdentifier ?? "local.blakeg.grindset"
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .filter { $0 != NSRunningApplication.current }
@@ -288,7 +302,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !notificationAuthRequested {
             notificationAuthRequested = true
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+            let center = UNUserNotificationCenter.current()
+            center.delegate = self // present banners even when we're "frontmost"
+            center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
         startTick()
         updateIcon()
@@ -318,7 +334,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func installPowerSourceObserver() {
         let callback: IOPowerSourceCallbackType = { context in
             guard let context else { return }
-            Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue().checkBatteryGuard()
+            let delegate = Unmanaged<AppDelegate>.fromOpaque(context).takeUnretainedValue()
+            DispatchQueue.main.async { delegate.checkBatteryGuard() } // explicit main-thread contract
         }
         let context = Unmanaged.passUnretained(self).toOpaque()
         guard let source = IOPSNotificationCreateRunLoopSource(callback, context)?.takeRetainedValue() else { return }
@@ -343,7 +360,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Keeping an unplugged laptop awake until it dies is the one way this app
     // can genuinely hurt — stop the session before that happens.
     func checkBatteryGuard() {
-        guard isAwake, let status = batteryStatus(), status.onBattery, status.percent <= 10 else { return }
+        guard isAwake, let status = batteryStatus(), status.onBattery,
+              status.percent <= batteryGuardPercent else { return }
         stopAwake()
         NSSound(named: "Glass")?.play()
         let content = UNMutableNotificationContent()
@@ -387,6 +405,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let turningOn = !lidSleepDisabled
         if setDisableSleep(turningOn) {
             lidSleepDisabled = turningOn
+            UserDefaults.standard.set(turningOn, forKey: Self.ownsDisableSleepKey)
         }
         // On failure (cancelled prompt) the checkbox simply doesn't change.
     }
@@ -414,7 +433,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     let alert = NSAlert()
                     alert.messageText = "Camera access needed"
-                    alert.informativeText = "Allow Awake to use the camera in System Settings → Privacy & Security → Camera, then try again."
+                    alert.informativeText = "Allow Grindset to use the camera in System Settings → Privacy & Security → Camera, then try again."
                     alert.runModal()
                 }
             }
@@ -431,15 +450,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let session = AVCaptureSession()
         session.sessionPreset = .high
-        guard session.canAddInput(input) else { return }
+        guard session.canAddInput(input) else {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't start the camera"
+            alert.informativeText = "It may be in use by another app."
+            alert.runModal()
+            return
+        }
         session.addInput(input)
 
         let output = AVCapturePhotoOutput()
-        if session.canAddOutput(output) { session.addOutput(output) }
-        photoOutput = output
+        if session.canAddOutput(output) {
+            session.addOutput(output)
+            photoOutput = output
+            // Configure mirroring at setup, before startRunning — mutating the
+            // connection while the session runs races its internal queue.
+            if let conn = output.connection(with: .video), conn.isVideoMirroringSupported {
+                conn.automaticallyAdjustsVideoMirroring = false
+                conn.isVideoMirrored = true // match the mirrored preview
+            }
+        }
 
         let size = NSSize(width: 320, height: 240)
-        let visible = NSScreen.main?.visibleFrame
+        // Clamp to the screen the status item is actually on (multi-display).
+        let visible = statusItem.button?.window?.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         // Drop the panel just below the status item, clamped to the screen.
         var origin = NSPoint(x: visible.maxX - size.width - 16,
@@ -539,9 +574,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         photoOutput = nil
         snapButton = nil
         if let session = captureSession {
+            captureSession = nil // clear before the async stop so no caller sees a stopping session
             // Turn the camera (and its indicator light) off immediately.
             DispatchQueue.global(qos: .userInitiated).async { session.stopRunning() }
-            captureSession = nil
         }
         breakPanel?.orderOut(nil)
         breakPanel = nil
@@ -572,7 +607,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         shadow.shadowColor = .black
         shadow.shadowBlurRadius = 10
         label.shadow = shadow
-        label.frame = view.bounds.insetBy(dx: 0, dy: (view.bounds.height - 130) / 2)
+        let labelHeight = ceil(110 * 1.25) // countdown font size × line height
+        label.frame = view.bounds.insetBy(dx: 0, dy: max(0, (view.bounds.height - labelHeight) / 2))
         view.addSubview(label)
         countdownLabel = label
         NSSound(named: "Tink")?.play()
@@ -604,17 +640,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             armClickOutsideMonitor()
             return
         }
-        // Bake in the same mirroring the preview shows.
-        if let conn = output.connection(with: .video), conn.isVideoMirroringSupported {
-            conn.automaticallyAdjustsVideoMirroring = false
-            conn.isVideoMirrored = true
-        }
-        let settings: AVCapturePhotoSettings
-        if output.availablePhotoCodecTypes.contains(.jpeg) {
-            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
-        } else {
-            settings = AVCapturePhotoSettings()
-        }
+        // JPEG is always available on macOS 13+; a codec fallback would silently
+        // write HEIC bytes into a .jpg file.
+        let settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
         NSSound(named: "Pop")?.play()
         announce("Snap")
         output.capturePhoto(with: settings, delegate: self)
@@ -624,8 +652,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func flashPanel() {
         guard let view = breakPanel?.contentView else { return }
         let finish = { [weak self] in
-            self?.snapButton?.isHidden = false
-            self?.armClickOutsideMonitor()
+            // Panel may have been closed during the flash; don't re-arm a
+            // global monitor with nothing left to guard.
+            guard let self, self.breakPanel != nil else { return }
+            self.snapButton?.isHidden = false
+            self.armClickOutsideMonitor()
         }
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             finish() // the Pop sound is the capture cue; skip the flash
@@ -655,10 +686,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        stopCaffeinate()
+        // Don't stop the session here — a cancelled quit must leave it running;
+        // applicationWillTerminate cleans up on actual exit.
         guard lidSleepDisabled else { return .terminateNow }
         if setDisableSleep(false) {
             lidSleepDisabled = false
+            UserDefaults.standard.set(false, forKey: Self.ownsDisableSleepKey)
             return .terminateNow
         }
         // Restore failed (cancelled password prompt or pmset error). Don't
@@ -702,12 +735,35 @@ extension AppDelegate: AVCapturePhotoCaptureDelegate {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
             }
         } catch {
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.messageText = "Couldn't save the photo"
-                alert.informativeText = error.localizedDescription
-                alert.runModal()
+            // Desktop may be TCC-denied — don't lose the shot; fall back to /tmp.
+            let fallback = FileManager.default.temporaryDirectory
+                .appendingPathComponent(url.lastPathComponent)
+            if (try? data.write(to: fallback)) != nil {
+                DispatchQueue.main.async {
+                    NSWorkspace.shared.activateFileViewerSelecting([fallback])
+                    let alert = NSAlert()
+                    alert.messageText = "Saved to a temporary folder instead"
+                    alert.informativeText = "Grindset couldn't write to your Desktop. Allow Desktop access in System Settings → Privacy & Security → Files and Folders, then move the photo somewhere safe — temporary files don't survive forever."
+                    alert.runModal()
+                }
+            } else {
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.messageText = "Couldn't save the photo"
+                    alert.informativeText = error.localizedDescription
+                    alert.runModal()
+                }
             }
         }
+    }
+}
+
+extension AppDelegate: UNUserNotificationCenterDelegate {
+    // Without this, macOS suppresses banners whenever the app is "frontmost"
+    // (which a nonactivating accessory app can technically be).
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 }
