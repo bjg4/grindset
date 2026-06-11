@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>Awake</string>
+	<string>Grindset</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.blakeg.awake</string>
+	<string>local.blakeg.grindset</string>
 	<key>CFBundleName</key>
-	<string>Awake</string>
+	<string>Grindset</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>

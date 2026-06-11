@@ -6,11 +6,11 @@ product
 
 ## Users
 
-One person: a Mac-using professional who runs long tasks (builds, agents, deploys) and presentations, often on a laptop. Context is "mid-task, hands busy" — they interact with Awake for one second at a time, from the menu bar, usually without looking. Secondary moment: about to hop on a video call and wanting a quick mirror check without opening Photo Booth.
+One person: a Mac-using professional who runs long tasks (builds, agents, deploys) and presentations, often on a laptop. Context is "mid-task, hands busy" — they interact with Grindset for one second at a time, from the menu bar, usually without looking. Secondary moment: about to hop on a video call and wanting a quick mirror check without opening Photo Booth.
 
 ## Product Purpose
 
-Awake is a homemade Amphetamine replacement: keep the Mac from sleeping (one click, or timed sessions), optionally survive a closed lid, and take a "Coffee Break" — a tiny webcam mirror with a 3·2·1 photo booth. Success = the common case is one click, the system's sleep state is never silently left broken, and using it makes you smile slightly.
+Grindset is a homemade Amphetamine replacement: keep the Mac from sleeping (one click, or timed sessions), optionally survive a closed lid, and take a "Coffee Break" — a tiny webcam mirror with a 3·2·1 photo booth. Success = the common case is one click, the system's sleep state is never silently left broken, and using it makes you smile slightly.
 
 ## Brand Personality
 
@@ -18,7 +18,7 @@ Playful utility. Warm, charming, a bit cheeky — the coffee metaphor carries th
 
 ## Anti-references
 
-- Enterprise utility design: settings panes, tabs, preference windows. Awake must never grow a Preferences window.
+- Enterprise utility design: settings panes, tabs, preference windows. Grindset must never grow a Preferences window.
 - Menu bar apps with 15-item menus (classic Bartender-era clutter). The menu is six rows; it stays six rows.
 - Gimmick apps where the joke outranks the job — no animated mascots, no coffee puns in error messages that obscure what went wrong.
 - Electron-style non-native chrome. It's AppKit; it should feel like macOS.

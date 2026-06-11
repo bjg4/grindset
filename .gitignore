@@ -1,6 +1,6 @@
 # compiled binary + signature (Info.plist stays — it's source)
-Awake.app/Contents/MacOS/Awake
-Awake.app/Contents/_CodeSignature/
+Grindset.app/Contents/MacOS/Grindset
+Grindset.app/Contents/_CodeSignature/
 
 # impeccable critique snapshots
 .impeccable/

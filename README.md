@@ -1,20 +1,20 @@
-# Awake ☕
+# Grindset ☕
 
-A tiny macOS menu bar app that keeps your Mac awake — with a webcam mirror and photo booth thrown in. A homemade, single-file take on Amphetamine + Hand Mirror.
+Lock in. A tiny macOS menu bar app that keeps your Mac awake — with a webcam mirror and photo booth thrown in. A homemade, single-file take on Amphetamine + Hand Mirror.
 
 ## What it does
 
-- **Left-click the cup** — instantly toggle keep-awake on/off (indefinite session)
-- **Right-click** — menu with timed sessions (30 min / 1 h / 2 h / 4 h), lid-close override, Coffee Break, Quit
+- **Left-click the cup** — lock in: instantly toggle keep-awake on/off (indefinite session)
+- **Right-click** — menu with timed sessions ("Lock In For" 30 min / 1 h / 2 h / 4 h), lid-close override, Coffee Break, Quit
 - **Stay Awake When Lid Closes** — flips `pmset disablesleep` (asks for your admin password); restored automatically on quit
 - **Coffee Break** — a small floating, mirrored webcam panel to check how you look before a call
 - **Photo Booth** — camera button in the Coffee Break panel: 3·2·1 countdown, flash, photo saved to your Desktop
 - Timed sessions show remaining time next to the cup ("☕ 47m") and notify you when they end
-- **Battery guard** — on battery at ≤10%, Awake stops the session and tells you, instead of keeping your Mac awake until it dies
+- **Battery guard** — on battery at ≤10%, Grindset ends the session and tells you, instead of keeping your Mac awake until it dies (event-driven via IOKit, no polling)
 
 ## Safety promises
 
-Sleep state is system-global, so Awake is paranoid about never leaving your Mac worse than it found it:
+Sleep state is system-global, so Grindset is paranoid about never leaving your Mac worse than it found it:
 
 - caffeinate is spawned with `-w <pid>` — it dies with the app, even on a crash or force-quit
 - The real `pmset` state is read at launch, so an orphaned `disablesleep=1` from a crash heals on the next normal quit
@@ -28,9 +28,9 @@ If things ever do get stuck: `sudo pmset -a disablesleep 0`
 No Xcode project — just `swiftc`:
 
 ```bash
-swiftc -O -parse-as-library main.swift -o Awake.app/Contents/MacOS/Awake
-codesign --force --sign - Awake.app
-open Awake.app
+swiftc -O -parse-as-library main.swift -o Grindset.app/Contents/MacOS/Grindset
+codesign --force --sign - Grindset.app
+open Grindset.app
 ```
 
 Requires macOS 13+. Camera and Desktop access are requested on first use; the lid override asks for your admin password each time.

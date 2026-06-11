@@ -59,7 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.target = self
             button.action = #selector(statusButtonClicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            button.toolTip = "Awake — click to toggle keep-awake, right-click for options"
+            button.toolTip = "Grindset — click to lock in, right-click for options"
         }
         updateIcon()
         showWelcomeIfNeeded()
@@ -71,7 +71,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(true, forKey: key)
 
         let label = NSTextField(wrappingLabelWithString:
-            "Click the cup to keep your Mac awake.\nRight-click for timers, lid settings, and Coffee Break.")
+            "Click the cup to lock in — your Mac stays awake.\nRight-click for timers, lid settings, and Coffee Break.")
         label.font = .systemFont(ofSize: 13)
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 264, height: 70))
         label.frame = container.bounds.insetBy(dx: 14, dy: 12)
@@ -111,7 +111,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Two instances would fight over the single global disablesleep value.
     func exitIfAlreadyRunning() {
-        let bundleID = Bundle.main.bundleIdentifier ?? "local.blakeg.awake"
+        let bundleID = Bundle.main.bundleIdentifier ?? "local.blakeg.grindset"
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
             .filter { $0 != NSRunningApplication.current }
         if !others.isEmpty {
@@ -162,10 +162,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if isAwake {
             menu.addItem(makeItem("Let It Sleep", #selector(stopAwake), key: "s"))
         } else {
-            menu.addItem(makeItem("Keep Awake", #selector(startIndefinite), key: "a"))
+            menu.addItem(makeItem("Lock In", #selector(startIndefinite), key: "a"))
         }
 
-        let forItem = NSMenuItem(title: "Keep Awake For", action: nil, keyEquivalent: "")
+        let forItem = NSMenuItem(title: "Lock In For", action: nil, keyEquivalent: "")
         let sub = NSMenu()
         let durations: [(String, TimeInterval)] = [
             ("30 minutes", 30 * 60),
@@ -190,7 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             : "Coffee Break", #selector(toggleCoffeeBreak), key: "b"))
 
         menu.addItem(.separator())
-        menu.addItem(makeItem("Quit Awake", #selector(quit), key: "q"))
+        menu.addItem(makeItem("Quit Grindset", #selector(quit), key: "q"))
         return menu
     }
 
@@ -209,9 +209,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func statusText() -> String {
         if isAwake {
             if let ends = sessionEndsAt {
-                return "Awake until \(Self.timeFormatter.string(from: ends))"
+                return "Locked in until \(Self.timeFormatter.string(from: ends))"
             }
-            return "Awake indefinitely"
+            return "Locked in indefinitely"
         }
         return "Sleeping normally"
     }
@@ -226,7 +226,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateIcon() {
         let name = isAwake ? "cup.and.saucer.fill" : "cup.and.saucer"
-        var stateLabel = isAwake ? "Awake — keeping your Mac awake" : "Awake — sleeping normally"
+        var stateLabel = isAwake ? "Grindset — locked in, keeping your Mac awake" : "Grindset — sleeping normally"
         let remaining = remainingText()
         if let remaining { stateLabel += ", \(remaining) remaining" }
         if let img = NSImage(systemSymbolName: name, accessibilityDescription: stateLabel) {
@@ -349,8 +349,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let content = UNMutableNotificationContent()
         content.title = "Battery low — letting your Mac sleep"
         content.body = lidSleepDisabled
-            ? "Awake stopped at \(status.percent)%. Heads up: lid-close sleep is still disabled."
-            : "Awake stopped keeping your Mac awake at \(status.percent)%."
+            ? "Grindset stopped at \(status.percent)%. Heads up: lid-close sleep is still disabled."
+            : "Grindset stopped keeping your Mac awake at \(status.percent)%."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
@@ -361,7 +361,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopAwake()
         NSSound(named: "Glass")?.play()
         let content = UNMutableNotificationContent()
-        content.title = "Awake is done"
+        content.title = "Grindset complete"
         content.body = "Letting your Mac sleep again."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
