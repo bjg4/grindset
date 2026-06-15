@@ -11,6 +11,7 @@ Lock in. A tiny macOS menu bar app that keeps your Mac awake — with a webcam m
 - **Photo Booth** — camera button in the Coffee Break panel: 3·2·1 countdown, flash, photo saved to your Desktop
 - Timed sessions show remaining time next to the cup ("☕ 47m") and notify you when they end
 - **Battery guard** — on battery at ≤10%, Grindset ends the session and tells you, instead of keeping your Mac awake until it dies (event-driven via IOKit, no polling)
+- **Calendar** — a second menu bar item shows today's date in a rounded box; click it for a month-grid popover. Scroll (or use the arrows) to flip months, click the month title to jump back to today. No permissions, no event access
 
 ## Safety promises
 

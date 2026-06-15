@@ -13,6 +13,28 @@ final class BreakPanel: NSPanel {
     }
 }
 
+// Calendar popover host: scroll up/down (or trackpad swipe) steps months,
+// the way Itsycal does. Precise trackpad deltas accumulate to a step and
+// ignore inertia overshoot; a notched mouse wheel steps once per notch.
+final class CalendarHostView: NSView {
+    var onScrollStep: ((Int) -> Void)?
+    private var accum: CGFloat = 0
+
+    override func scrollWheel(with event: NSEvent) {
+        if event.hasPreciseScrollingDeltas {
+            if event.momentumPhase != [] { return }
+            accum += event.scrollingDeltaY
+            let step: CGFloat = 22
+            while accum >= step { onScrollStep?(-1); accum -= step }
+            while accum <= -step { onScrollStep?(1); accum += step }
+        } else if event.scrollingDeltaY > 0 {
+            onScrollStep?(-1)
+        } else if event.scrollingDeltaY < 0 {
+            onScrollStep?(1)
+        }
+    }
+}
+
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
     // NSApplication.delegate is unowned(unsafe); keep a strong reference
@@ -42,6 +64,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var notificationAuthRequested = false
     var tickTimer: Timer?
     var powerSourceRunLoopSource: CFRunLoopSource?
+    var dateStatusItem: NSStatusItem!
+    var calendarPopover: NSPopover?
+    var calendarVC: NSViewController?
+    var calendarHost: CalendarHostView?
+    var displayedMonth = Date()
 
     // Also documented in README ("≤10%") — keep the two in sync.
     let batteryGuardPercent = 10
@@ -75,6 +102,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.toolTip = "Grindset — click to lock in, right-click for options"
         }
         updateIcon()
+        setupDateItem()
+        NotificationCenter.default.addObserver(self, selector: #selector(dayChanged),
+                                               name: .NSCalendarDayChanged, object: nil)
         showWelcomeIfNeeded()
     }
 
@@ -680,6 +710,255 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         return f
     }()
+
+    // MARK: - Calendar (Itsycal-lite: day number in the bar, month-grid popover)
+
+    static let monthTitleFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "LLLL yyyy"
+        return f
+    }()
+
+    static let fullDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .full
+        return f
+    }()
+
+    func setupDateItem() {
+        dateStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = dateStatusItem.button {
+            button.target = self
+            button.action = #selector(dateItemClicked)
+            button.font = .systemFont(ofSize: 13, weight: .medium)
+        }
+        updateDateItem()
+    }
+
+    @objc func dayChanged() {
+        DispatchQueue.main.async { [weak self] in self?.updateDateItem() }
+    }
+
+    func updateDateItem() {
+        let now = Date()
+        let day = "\(Calendar.current.component(.day, from: now))"
+        if let button = dateStatusItem?.button {
+            button.image = Self.dateBadgeImage(day)
+            button.imagePosition = .imageOnly
+            button.title = ""
+            button.setAccessibilityLabel("Calendar — \(Self.fullDateFormatter.string(from: now))")
+            button.toolTip = Self.fullDateFormatter.string(from: now)
+        }
+    }
+
+    // The day number inside a rounded-rect outline, rendered as a template
+    // image so the menu bar tints it (white on dark, dark on light) for free.
+    static func dateBadgeImage(_ text: String) -> NSImage {
+        let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let textSize = (text as NSString).size(withAttributes: attrs)
+        let height: CGFloat = 15
+        let width = max(height, ceil(textSize.width) + 10)
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
+            let box = rect.insetBy(dx: 0.75, dy: 0.75)
+            let path = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+            path.lineWidth = 1.2
+            NSColor.black.setStroke()
+            path.stroke()
+            let origin = NSPoint(x: (rect.width - textSize.width) / 2,
+                                 y: (rect.height - textSize.height) / 2)
+            (text as NSString).draw(at: origin, withAttributes: attrs)
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    @objc func dateItemClicked() {
+        if let pop = calendarPopover, pop.isShown {
+            pop.performClose(nil)
+            return
+        }
+        guard let button = dateStatusItem.button else { return }
+        updateDateItem()
+        displayedMonth = Date() // always open on the current month
+
+        let host = CalendarHostView()
+        host.onScrollStep = { [weak self] direction in
+            guard let self else { return }
+            self.displayedMonth = Calendar.current.date(
+                byAdding: .month, value: direction, to: self.displayedMonth) ?? self.displayedMonth
+            self.refreshCalendar()
+        }
+        calendarHost = host
+        populateCalendar(into: host)
+
+        let vc = NSViewController()
+        vc.view = host
+        calendarVC = vc
+        let pop = NSPopover()
+        pop.behavior = .transient
+        pop.contentViewController = vc
+        pop.contentSize = host.fittingSize
+        pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        calendarPopover = pop
+    }
+
+    @objc func prevMonth() {
+        displayedMonth = Calendar.current.date(byAdding: .month, value: -1, to: displayedMonth) ?? displayedMonth
+        refreshCalendar()
+    }
+
+    @objc func nextMonth() {
+        displayedMonth = Calendar.current.date(byAdding: .month, value: 1, to: displayedMonth) ?? displayedMonth
+        refreshCalendar()
+    }
+
+    @objc func jumpToToday() {
+        displayedMonth = Date()
+        refreshCalendar()
+    }
+
+    func refreshCalendar() {
+        guard let host = calendarHost else { return }
+        populateCalendar(into: host) // keep the same host so scroll stays live
+        calendarPopover?.contentSize = host.fittingSize // constant: month grid is always 6 rows
+        // Crossfade the new month in — height is fixed, so nothing jumps.
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+           let content = host.subviews.last {
+            content.wantsLayer = true
+            content.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.14
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                content.animator().alphaValue = 1
+            }
+        }
+    }
+
+    private func navButton(_ symbol: String, _ action: Selector, label: String) -> NSButton {
+        let button = NSButton(title: "", target: self, action: action)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.imagePosition = .imageOnly
+        button.isBordered = false
+        button.setAccessibilityLabel(label)
+        return button
+    }
+
+    private func weekdayLabel(_ text: String) -> NSView {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 10, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        return label
+    }
+
+    private func dayCell(_ date: Date?) -> NSView {
+        let cell = NSView()
+        cell.translatesAutoresizingMaskIntoConstraints = false
+        cell.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        cell.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        guard let date else { return cell } // blank padding cell
+
+        let label = NSTextField(labelWithString: "\(Calendar.current.component(.day, from: date))")
+        label.font = .systemFont(ofSize: 12)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        if Calendar.current.isDateInToday(date) {
+            let circle = NSView()
+            circle.wantsLayer = true
+            circle.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            circle.layer?.cornerRadius = 11
+            circle.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(circle)
+            NSLayoutConstraint.activate([
+                circle.widthAnchor.constraint(equalToConstant: 22),
+                circle.heightAnchor.constraint(equalToConstant: 22),
+                circle.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+                circle.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+            label.textColor = .alternateSelectedControlTextColor // correct "text on accent" token
+            label.setAccessibilityLabel("Today, " + Self.fullDateFormatter.string(from: date))
+        } else {
+            label.textColor = .labelColor
+        }
+
+        cell.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+        ])
+        return cell
+    }
+
+    // Cells for the displayed month: leading blanks to the first weekday, then
+    // each day, padded to whole weeks. Respects the locale's first weekday.
+    private func monthCells(_ month: Date) -> [Date?] {
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.year, .month], from: month)
+        guard let first = cal.date(from: comps),
+              let range = cal.range(of: .day, in: .month, for: first) else { return [] }
+        let leading = (cal.component(.weekday, from: first) - cal.firstWeekday + 7) % 7
+        var cells: [Date?] = Array(repeating: nil, count: leading)
+        for day in range {
+            cells.append(cal.date(byAdding: .day, value: day - 1, to: first))
+        }
+        while cells.count < 42 { cells.append(nil) } // always 6 rows → stable popover height
+        return cells
+    }
+
+    func populateCalendar(into host: CalendarHostView) {
+        host.subviews.forEach { $0.removeFromSuperview() }
+        let cal = Calendar.current
+        let gridWidth: CGFloat = 7 * 30 + 6 * 2
+
+        let prev = navButton("chevron.left", #selector(prevMonth), label: "Previous month")
+        let next = navButton("chevron.right", #selector(nextMonth), label: "Next month")
+        let title = NSButton(title: "", target: self, action: #selector(jumpToToday))
+        title.isBordered = false
+        title.attributedTitle = NSAttributedString(
+            string: Self.monthTitleFormatter.string(from: displayedMonth),
+            attributes: [.font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                         .foregroundColor: NSColor.labelColor])
+        title.toolTip = "Jump to today"
+        let header = NSStackView(views: [prev, title, next])
+        header.orientation = .horizontal
+        header.distribution = .equalSpacing
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.widthAnchor.constraint(equalToConstant: gridWidth).isActive = true
+
+        // Weekday symbols rotated to the locale's first weekday.
+        let symbols = cal.veryShortStandaloneWeekdaySymbols
+        let firstIndex = cal.firstWeekday - 1
+        let ordered = (0..<7).map { symbols[($0 + firstIndex) % 7] }
+
+        let grid = NSGridView(numberOfColumns: 7, rows: 0)
+        grid.rowSpacing = 2
+        grid.columnSpacing = 2
+        grid.addRow(with: ordered.map { weekdayLabel($0) })
+        let cells = monthCells(displayedMonth)
+        for weekStart in stride(from: 0, to: cells.count, by: 7) {
+            grid.addRow(with: (weekStart..<weekStart + 7).map { dayCell(cells[$0]) })
+        }
+
+        let stack = NSStackView(views: [header, grid])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        host.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: host.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+        ])
+    }
 
     // MARK: - Quit
 
