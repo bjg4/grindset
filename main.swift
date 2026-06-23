@@ -791,7 +791,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self.refreshCalendar()
         }
         calendarHost = host
-        populateCalendar(into: host)
+        let size = populateCalendar(into: host)
 
         let vc = NSViewController()
         vc.view = host
@@ -799,7 +799,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let pop = NSPopover()
         pop.behavior = .transient
         pop.contentViewController = vc
-        pop.contentSize = host.fittingSize
+        pop.contentSize = size
         pop.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         calendarPopover = pop
     }
@@ -821,8 +821,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func refreshCalendar() {
         guard let host = calendarHost else { return }
-        populateCalendar(into: host) // keep the same host so scroll stays live
-        calendarPopover?.contentSize = host.fittingSize // constant: month grid is always 6 rows
+        let size = populateCalendar(into: host) // keep the same host so scroll stays live
+        calendarPopover?.contentSize = size // constant: month grid is always 6 rows
         // Crossfade the new month in — height is fixed, so nothing jumps.
         if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
            let content = host.subviews.last {
@@ -910,7 +910,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return cells
     }
 
-    func populateCalendar(into host: CalendarHostView) {
+    @discardableResult
+    func populateCalendar(into host: CalendarHostView) -> NSSize {
         host.subviews.forEach { $0.removeFromSuperview() }
         let cal = Calendar.current
         let gridWidth: CGFloat = 7 * 30 + 6 * 2
@@ -948,16 +949,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 12, right: 14)
         stack.translatesAutoresizingMaskIntoConstraints = false
 
+        // Proper frosted popover material so dark text reads on a light panel
+        // instead of bleeding through to the desktop.
+        let backdrop = NSVisualEffectView()
+        backdrop.material = .popover
+        backdrop.blendingMode = .behindWindow
+        backdrop.state = .active
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+
+        host.addSubview(backdrop)
         host.addSubview(stack)
         NSLayoutConstraint.activate([
+            backdrop.topAnchor.constraint(equalTo: host.topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+            backdrop.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: host.trailingAnchor),
             stack.topAnchor.constraint(equalTo: host.topAnchor),
             stack.bottomAnchor.constraint(equalTo: host.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: host.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: host.trailingAnchor),
         ])
+
+        // Size deterministically from the laid-out content — host.fittingSize
+        // on a bare NSView over-reports, which left a tall empty band.
+        host.layoutSubtreeIfNeeded()
+        let size = stack.fittingSize
+        host.setFrameSize(size)
+        return size
     }
 
     // MARK: - Quit
