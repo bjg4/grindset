@@ -1,0 +1,22 @@
+name: Package acceptance
+on:
+  push:
+    branches: [main, codex/release-standard]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bjg4/blakeist-release@9a144fa5d4d4aa639e21874482c18c01ed5ee819
+        with:
+          preview: 'true'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: internal-package
+          path: release-output/
+          retention-days: 7
