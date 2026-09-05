@@ -117,7 +117,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(true, forKey: key)
 
         let label = NSTextField(wrappingLabelWithString:
-            "Click the cup to lock in — your Mac stays awake.\nRight-click for timers, lid settings, and Coffee Break.")
+            "Click the cup, approve the session, then close your lid and keep working.\nRight-click for timers and Coffee Break.")
         label.font = .systemFont(ofSize: 13)
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 264, height: 70))
         label.frame = container.bounds.insetBy(dx: 14, dy: 12)
@@ -137,13 +137,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func statusButtonClicked() {
+        guard !lidTransition else { return }
         let event = NSApp.currentEvent
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             showMenu()
         } else if isAwake {
             stopAwake()
         } else {
-            startAwake(duration: nil)
+            startWorking(duration: nil)
         }
     }
 
@@ -301,11 +302,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Keep awake
 
-    @objc func startIndefinite() { startAwake(duration: nil) }
+    @objc func startIndefinite() { startWorking(duration: nil) }
 
     @objc func startTimed(_ sender: NSMenuItem) {
         guard let secs = sender.representedObject as? TimeInterval else { return }
-        startAwake(duration: secs)
+        startWorking(duration: secs)
+    }
+
+    // Every Lock In entry point includes the core closed-lid workflow.
+    // Do not leave an apparently active session after approval is cancelled.
+    func startWorking(duration: TimeInterval?) {
+        guard !lidTransition else { return }
+        if lidSleepDisabled && lidSession == nil {
+            toggleLid() // Recover a previous version's orphaned override first.
+            return
+        }
+        startAwake(duration: duration)
+        if isAwake && lidSession == nil { toggleLid() }
     }
 
     func startAwake(duration: TimeInterval?) {
@@ -452,6 +465,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleLid() {
         guard !lidTransition else { return }
         if let lidSession {
+            stopCaffeinate()
             lidTransition = true
             lidSession.stop()
             updateIcon()
@@ -493,12 +507,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             case "restoring":
                 self.lidTransition = true
             case "error":
+                self.stopCaffeinate()
                 self.lidSession = nil
                 self.lidTransition = false
                 self.showLidError(reason == "sleep-already-disabled"
                     ? "Another setting already disables system sleep. Restore that setting first so Grindset can safely own and clean up its session."
                     : (reason ?? "The sleep guard could not start."))
+                if self.waitingToQuit { NSApp.reply(toApplicationShouldTerminate: true) }
             case "disconnected":
+                self.stopCaffeinate()
                 self.lidSession = nil
                 self.lidTransition = false
                 self.lidSleepDisabled = Self.systemSleepDisabled()
@@ -515,6 +532,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         do { try session.start(deadline: sessionEndsAt) }
         catch {
+            stopCaffeinate()
             lidSession = nil
             lidTransition = false
             showLidError(error.localizedDescription)

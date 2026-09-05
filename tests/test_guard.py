@@ -25,8 +25,11 @@ class GuardTests(unittest.TestCase):
         self.server.settimeout(5)
         self.child = None
         self.client = None
+        self.reader = None
 
     def tearDown(self):
+        if self.reader:
+            self.reader.close()
         if self.client:
             self.client.close()
         self.server.close()
@@ -128,6 +131,7 @@ while True: c.recv(4096)
             if parent.poll() is None:
                 parent.kill()
             parent.wait()
+            parent.stdout.close()
 
 
 if __name__ == '__main__':

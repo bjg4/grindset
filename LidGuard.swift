@@ -26,9 +26,21 @@ enum LidGuard {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
         try process.run()
+        // A hung system utility must not prevent this guard from retrying cleanup.
+        guard finished.wait(timeout: .now() + 5) == .success else {
+            process.terminate()
+            if finished.wait(timeout: .now() + 1) != .success {
+                kill(process.processIdentifier, SIGKILL)
+                _ = finished.wait(timeout: .now() + 1)
+            }
+            pipe.fileHandleForReading.closeFile()
+            throw GuardError.pmset
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        pipe.fileHandleForReading.closeFile()
         guard process.terminationStatus == 0 else { throw GuardError.pmset }
         if value != nil { return try pmset() }
         let output = String(decoding: data, as: UTF8.self)

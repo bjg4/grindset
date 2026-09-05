@@ -113,7 +113,17 @@ final class LidSession {
         defer { lock.unlock() }
         guard connection >= 0 else { return }
         data.withUnsafeBytes { bytes in
-            _ = Darwin.send(connection, bytes.baseAddress, bytes.count, 0)
+            var offset = 0
+            while offset < bytes.count {
+                let count = Darwin.send(connection, bytes.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
+                if count < 0 && errno == EINTR { continue }
+                if count <= 0 {
+                    // EOF makes the guard restore sleep even if a command failed.
+                    shutdown(connection, SHUT_RDWR)
+                    break
+                }
+                offset += count
+            }
         }
     }
 
