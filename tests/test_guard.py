@@ -143,7 +143,12 @@ class GuardTests(unittest.TestCase):
         self.send(command='stop')
         # Deliberately never read the status messages. A blocking send would
         # fill the socket and strand the guard before its final restore attempt.
-        self.child.wait(timeout=7)
+        try:
+            self.child.wait(timeout=7)
+        except subprocess.TimeoutExpired:
+            diagnostics = subprocess.run(['/usr/bin/sample', str(self.child.pid), '1', '1'],
+                                         capture_output=True, text=True, timeout=10)
+            self.fail('Guard did not restore under backpressure.\n' + diagnostics.stdout[:14000])
         self.assertEqual(self.state.read_text(), '0')
 
     def test_helper_termination_signal_restores_sleep(self):
