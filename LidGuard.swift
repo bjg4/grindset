@@ -222,7 +222,8 @@ enum LidGuard {
                 } catch {}
                 send(fd, "restoring", reason: "retrying-sleep-restore")
                 #if GUARD_TESTING
-                usleep(ProcessInfo.processInfo.environment["GRINDSET_TEST_RETRY_MICROSECONDS"].flatMap(UInt32.init) ?? 2_000_000)
+                let delay = ProcessInfo.processInfo.environment["GRINDSET_TEST_RETRY_MICROSECONDS"].flatMap(UInt32.init) ?? 2_000_000
+                if delay > 0 { usleep(delay) }
                 #else
                 sleep(2)
                 #endif
