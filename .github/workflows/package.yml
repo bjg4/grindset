@@ -1,11 +1,8 @@
 name: Package acceptance
+# Hosted checks are paused after the Actions allowance incident.
+# Run manually only after an execution budget has been approved.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '23 14 * * 1'
 concurrency:
   group: package-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
