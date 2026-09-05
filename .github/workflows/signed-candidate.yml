@@ -1,0 +1,16 @@
+name: Prepare signed candidate
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [firstdrop, release]
+        default: firstdrop
+permissions:
+  contents: read
+jobs:
+  candidate:
+    uses: bjg4/blakeist-release/.github/workflows/signed-candidate.yml@3b410e2fb550f165f8c1466b693badef5c2201dd
+    with:
+      channel: ${{ inputs.channel }}
+    secrets: inherit

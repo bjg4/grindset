@@ -518,10 +518,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.stopCaffeinate()
                 self.lidSession = nil
                 self.lidTransition = false
-                self.lidSleepDisabled = Self.systemSleepDisabled()
-                if self.lidSleepDisabled {
+                let sleepDisabled = Self.systemSleepDisabled()
+                let ownsOverride = UserDefaults.standard.bool(forKey: Self.ownsDisableSleepKey)
+                self.lidSleepDisabled = sleepDisabled && ownsOverride
+                if sleepDisabled {
                     self.stopCaffeinate()
-                    self.showLidError("The sleep guard disconnected before confirming cleanup. Use the lid-close menu item to restore sleep, or run sudo pmset -a disablesleep 0.")
+                    self.showLidError(ownsOverride
+                        ? "The sleep guard disconnected before confirming cleanup. Use the lid-close menu item to restore sleep, or run sudo pmset -a disablesleep 0."
+                        : "Sleep is disabled, but Grindset could not confirm it owns that setting. Check other power tools before using the manual recovery steps in Help.")
+                    if self.waitingToQuit {
+                        self.waitingToQuit = false
+                        NSApp.reply(toApplicationShouldTerminate: false)
+                    }
                 } else {
                     UserDefaults.standard.set(false, forKey: Self.ownsDisableSleepKey)
                     if self.waitingToQuit { NSApp.reply(toApplicationShouldTerminate: true) }
