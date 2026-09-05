@@ -11,7 +11,11 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Grindset asks for administrator approval to start a temporary lid-close session that restores sleep when the session ends.</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSUIElement</key>
