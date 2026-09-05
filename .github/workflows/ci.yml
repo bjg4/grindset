@@ -1,0 +1,25 @@
+name: Build and validate Grindset
+on:
+  push:
+    branches: [main, codex/release-standard]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build both architectures and run lease checks
+        run: bash build.sh
+      - name: Archive internal test build
+        run: ditto -c -k --keepParent dist/Grindset.app dist/Grindset-internal.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grindset-internal-${{ github.sha }}
+          path: dist/Grindset-internal.zip
+          retention-days: 7

@@ -1,0 +1,10 @@
+{
+  "id": "grindset",
+  "name": "Grindset",
+  "bundleId": "local.blakeg.grindset",
+  "appPath": "dist/Grindset.app",
+  "minimumSystemVersion": "13.0",
+  "architectures": ["arm64", "x86_64"],
+  "entitlements": "packaging/entitlements.plist",
+  "build": ["bash", "build.sh"]
+}

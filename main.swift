@@ -52,6 +52,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var sessionTimer: Timer?
     var sessionEndsAt: Date?
     var lidSleepDisabled = false
+    var lidSession: LidSession?
+    var lidTransition = false
+    var waitingToQuit = false
     var sigtermSource: DispatchSourceSignal?
     var breakPanel: BreakPanel?
     var captureSession: AVCaptureSession?
@@ -225,8 +228,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         forItem.submenu = sub
         menu.addItem(forItem)
 
-        let lid = makeItem("Stay Awake When Lid Closes", #selector(toggleLid))
+        let lid = makeItem(lidTransition ? "Updating Lid-Close Session…" : "Keep Working With Lid Closed", #selector(toggleLid))
         lid.state = lidSleepDisabled ? .on : .off
+        lid.isEnabled = !lidTransition
         menu.addItem(lid)
 
         menu.addItem(makeItem(breakPanel?.isVisible == true
@@ -234,6 +238,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             : "Coffee Break", #selector(toggleCoffeeBreak), key: "b"))
 
         menu.addItem(.separator())
+        let help = NSMenuItem(title: "Help and Release Information", action: #selector(openHelp), keyEquivalent: "")
+        help.target = self
+        menu.addItem(help)
         menu.addItem(makeItem("Quit Grindset", #selector(quit), key: "q"))
         return menu
     }
@@ -251,6 +258,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }()
 
     func statusText() -> String {
+        if lidTransition { return "Updating lid-close protection…" }
+        if lidSleepDisabled {
+            if let ends = sessionEndsAt { return "Working with lid closed until \(Self.timeFormatter.string(from: ends))" }
+            return "Working with lid closed"
+        }
         if isAwake {
             if let ends = sessionEndsAt {
                 return "Locked in until \(Self.timeFormatter.string(from: ends))"
@@ -270,7 +282,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateIcon() {
         let name = isAwake ? "cup.and.saucer.fill" : "cup.and.saucer"
-        var stateLabel = isAwake ? "Grindset — locked in, keeping your Mac awake" : "Grindset — sleeping normally"
+        var stateLabel = lidSleepDisabled ? "Grindset — keeping your Mac awake with the lid closed" :
+            (isAwake ? "Grindset — locked in, keeping your Mac awake" : "Grindset — sleeping normally")
+        if lidTransition { stateLabel = "Grindset — updating lid-close protection" }
         let remaining = remainingText()
         if let remaining { stateLabel += ", \(remaining) remaining" }
         if let img = NSImage(systemSymbolName: name, accessibilityDescription: stateLabel) {
@@ -338,6 +352,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         startTick()
         updateIcon()
+        lidSession?.configure(deadline: sessionEndsAt)
+        checkBatteryGuard()
     }
 
     // MARK: - Session tick (menu bar countdown + battery guard)
@@ -390,15 +406,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Keeping an unplugged laptop awake until it dies is the one way this app
     // can genuinely hurt — stop the session before that happens.
     func checkBatteryGuard() {
-        guard isAwake, let status = batteryStatus(), status.onBattery,
+        guard isAwake || lidSleepDisabled, let status = batteryStatus(), status.onBattery,
               status.percent <= batteryGuardPercent else { return }
         stopAwake()
         NSSound(named: "Glass")?.play()
         let content = UNMutableNotificationContent()
-        content.title = "Battery low — letting your Mac sleep"
-        content.body = lidSleepDisabled
-            ? "Grindset stopped at \(status.percent)%. Heads up: lid-close sleep is still disabled."
-            : "Grindset stopped keeping your Mac awake at \(status.percent)%."
+        content.title = "Battery low — ending your session"
+        content.body = "Grindset stopped at \(status.percent)% and is restoring normal sleep."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
@@ -410,13 +424,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSSound(named: "Glass")?.play()
         let content = UNMutableNotificationContent()
         content.title = "Grindset complete"
-        content.body = "Letting your Mac sleep again."
+        content.body = lidSleepDisabled ? "Restoring normal sleep, including when the lid is closed." : "Letting your Mac sleep again."
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
     @objc func stopAwake() {
         stopCaffeinate()
+        if let lidSession {
+            lidTransition = true
+            lidSession.stop()
+        }
         updateIcon()
     }
 
@@ -432,12 +450,91 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Lid sleep (pmset disablesleep)
 
     @objc func toggleLid() {
-        let turningOn = !lidSleepDisabled
-        if setDisableSleep(turningOn) {
-            lidSleepDisabled = turningOn
-            UserDefaults.standard.set(turningOn, forKey: Self.ownsDisableSleepKey)
+        guard !lidTransition else { return }
+        if let lidSession {
+            lidTransition = true
+            lidSession.stop()
+            updateIcon()
+            return
         }
-        // On failure (cancelled prompt) the checkbox simply doesn't change.
+        // Recover a setting left by a version that predates the session guard.
+        if lidSleepDisabled {
+            if setDisableSleep(false) {
+                lidSleepDisabled = false
+                UserDefaults.standard.set(false, forKey: Self.ownsDisableSleepKey)
+                updateIcon()
+            }
+            return
+        }
+        if let battery = batteryStatus(), battery.onBattery, battery.percent <= batteryGuardPercent {
+            showLidError("Charge your Mac above \(batteryGuardPercent)% or connect power before starting a lid-close session.")
+            return
+        }
+        if !isAwake { startAwake(duration: nil) }
+        guard isAwake else { return }
+        let session = LidSession()
+        lidSession = session
+        lidTransition = true
+        session.onStatus = { [weak self, weak session] status, reason in
+            guard let self, let session, self.lidSession === session else { return }
+            switch status {
+            case "active":
+                self.lidSleepDisabled = true
+                self.lidTransition = false
+                UserDefaults.standard.set(true, forKey: Self.ownsDisableSleepKey)
+                session.configure(deadline: self.sessionEndsAt)
+            case "restored":
+                self.lidSleepDisabled = false
+                self.lidTransition = false
+                self.lidSession = nil
+                UserDefaults.standard.set(false, forKey: Self.ownsDisableSleepKey)
+                if reason != "stopped" { self.stopCaffeinate() }
+                if self.waitingToQuit { NSApp.reply(toApplicationShouldTerminate: true) }
+            case "restoring":
+                self.lidTransition = true
+            case "error":
+                self.lidSession = nil
+                self.lidTransition = false
+                self.showLidError(reason == "sleep-already-disabled"
+                    ? "Another setting already disables system sleep. Restore that setting first so Grindset can safely own and clean up its session."
+                    : (reason ?? "The sleep guard could not start."))
+            case "disconnected":
+                self.lidSession = nil
+                self.lidTransition = false
+                self.lidSleepDisabled = Self.systemSleepDisabled()
+                if self.lidSleepDisabled {
+                    self.stopCaffeinate()
+                    self.showLidError("The sleep guard disconnected before confirming cleanup. Use the lid-close menu item to restore sleep, or run sudo pmset -a disablesleep 0.")
+                } else {
+                    UserDefaults.standard.set(false, forKey: Self.ownsDisableSleepKey)
+                    if self.waitingToQuit { NSApp.reply(toApplicationShouldTerminate: true) }
+                }
+            default: break
+            }
+            self.updateIcon()
+        }
+        do { try session.start(deadline: sessionEndsAt) }
+        catch {
+            lidSession = nil
+            lidTransition = false
+            showLidError(error.localizedDescription)
+        }
+        updateIcon()
+    }
+
+    func showLidError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Lid-close session needs attention"
+        alert.informativeText = message
+        alert.runModal()
+        if waitingToQuit {
+            waitingToQuit = false
+            NSApp.reply(toApplicationShouldTerminate: false)
+        }
+    }
+
+    @objc func openHelp() {
+        NSWorkspace.shared.open(URL(string: "https://www.blake.ist/tools/grindset/help")!)
     }
 
     @discardableResult
@@ -986,6 +1083,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func quit() { NSApp.terminate(nil) }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if let lidSession {
+            waitingToQuit = true
+            lidTransition = true
+            lidSession.stop()
+            updateIcon()
+            return .terminateLater
+        }
         // Don't stop the session here — a cancelled quit must leave it running;
         // applicationWillTerminate cleans up on actual exit.
         guard lidSleepDisabled else { return .terminateNow }

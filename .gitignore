@@ -6,3 +6,7 @@ Grindset.app/Contents/_CodeSignature/
 .impeccable/
 
 .DS_Store
+.build/
+dist/
+release-output/
+*.proof
