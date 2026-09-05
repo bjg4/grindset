@@ -136,6 +136,16 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(self.state.read_text(), '1')
         self.restored('stopped')
 
+    def test_unresponsive_client_cannot_block_restore_retries(self):
+        self.start(GRINDSET_TEST_RESTORE_FAILURES='10000',
+                   GRINDSET_TEST_SEND_BUFFER='1024',
+                   GRINDSET_TEST_RETRY_MICROSECONDS='0')
+        self.send(command='stop')
+        # Deliberately never read the status messages. A blocking send would
+        # fill the socket and strand the guard before its final restore attempt.
+        self.child.wait(timeout=7)
+        self.assertEqual(self.state.read_text(), '0')
+
     def test_helper_termination_signal_restores_sleep(self):
         self.start()
         self.child.send_signal(signal.SIGTERM)

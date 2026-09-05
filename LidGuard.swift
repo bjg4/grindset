@@ -60,7 +60,20 @@ enum LidGuard {
         guard var data = try? JSONSerialization.data(withJSONObject: object) else { return }
         data.append(10)
         data.withUnsafeBytes { bytes in
-            _ = Darwin.send(fd, bytes.baseAddress, bytes.count, 0)
+            var offset = 0
+            while offset < bytes.count {
+                // Status delivery must never hold up restoration when the app
+                // is frozen or no longer draining its socket.
+                let written = Darwin.send(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset, MSG_DONTWAIT)
+                if written > 0 { offset += written }
+                else if written < 0 && errno == EINTR { continue }
+                else {
+                    // A partial JSON line cannot be retried as a new message.
+                    // End the connection so both peers enter their recovery path.
+                    shutdown(fd, SHUT_RDWR)
+                    return
+                }
+            }
         }
     }
 
@@ -93,6 +106,11 @@ enum LidGuard {
         let path = arguments[3]
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { exit(71) }
+        #if GUARD_TESTING
+        if var size = ProcessInfo.processInfo.environment["GRINDSET_TEST_SEND_BUFFER"].flatMap(Int32.init) {
+            setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, socklen_t(MemoryLayout<Int32>.size))
+        }
+        #endif
         defer { close(fd) }
         signal(SIGPIPE, SIG_IGN)
         var address = sockaddr_un()
@@ -203,7 +221,11 @@ enum LidGuard {
                     if try !pmset(false) { break }
                 } catch {}
                 send(fd, "restoring", reason: "retrying-sleep-restore")
+                #if GUARD_TESTING
+                usleep(ProcessInfo.processInfo.environment["GRINDSET_TEST_RETRY_MICROSECONDS"].flatMap(UInt32.init) ?? 2_000_000)
+                #else
                 sleep(2)
+                #endif
             }
             send(fd, "restored", reason: stopReason)
         }
