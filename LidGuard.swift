@@ -126,6 +126,10 @@ enum LidGuard {
             }
         }
         guard connected == 0 else { exit(69) }
+        // Set descriptor-level nonblocking mode as well as the per-send flag.
+        // Darwin Unix sockets can otherwise block a full status write.
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { exit(71) }
         var uid: uid_t = 0
         var gid: gid_t = 0
         var peerPID: pid_t = 0
