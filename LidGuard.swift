@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import Darwin
 import IOKit.ps
 
@@ -170,7 +171,16 @@ enum LidGuard {
                             guard let message = try JSONSerialization.jsonObject(with: line) as? [String: Any],
                                   let command = message["command"] as? String else { throw GuardError.connection }
                             if command == "stop" { requested = true }
-                            else if command == "configure" { deadline = message["deadline"] as? Double }
+                            else if command == "configure" {
+                                // Only an absent/null deadline requests an indefinite lease.
+                                // A malformed timer must never silently disable its limit.
+                                if let value = message["deadline"], !(value is NSNull) {
+                                    guard let number = value as? NSNumber,
+                                          CFGetTypeID(number) != CFBooleanGetTypeID(),
+                                          number.doubleValue.isFinite else { throw GuardError.connection }
+                                    deadline = number.doubleValue
+                                } else { deadline = nil }
+                            }
                             else { throw GuardError.connection }
                         }
                     }

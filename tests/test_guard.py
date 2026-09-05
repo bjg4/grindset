@@ -96,6 +96,39 @@ class GuardTests(unittest.TestCase):
         self.client.sendall(b'not-json\n')
         self.restored('guard-error')
 
+    def test_string_deadline_cannot_become_an_indefinite_session(self):
+        self.start()
+        self.send(command='configure', deadline='tomorrow')
+        self.restored('guard-error')
+
+    def test_boolean_deadline_is_not_a_timestamp(self):
+        self.start()
+        self.send(command='configure', deadline=True)
+        self.restored('guard-error')
+
+    def test_array_deadline_is_rejected(self):
+        self.start()
+        self.send(command='configure', deadline=[])
+        self.restored('guard-error')
+
+    def test_split_command_preserves_the_deadline(self):
+        self.start()
+        message = json.dumps({'command': 'configure', 'deadline': time.time() - 1}).encode() + b'\n'
+        for byte in message:
+            self.client.sendall(bytes([byte]))
+        self.restored('expired')
+
+    def test_null_deadline_remains_an_explicit_indefinite_session(self):
+        self.start()
+        self.send(command='configure', deadline=None)
+        self.send(command='stop')
+        self.restored('stopped')
+
+    def test_oversized_unterminated_command_restores_sleep(self):
+        self.start()
+        self.client.sendall(b'x' * 9000)
+        self.restored('app-exited')
+
     def test_restore_is_retried_until_confirmed(self):
         self.start(GRINDSET_TEST_RESTORE_FAILURES='2')
         self.send(command='stop')
