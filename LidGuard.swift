@@ -8,7 +8,18 @@ import IOKit.ps
 // touching pmset. A kernel process watch and socket EOF both end the lease.
 @main
 enum LidGuard {
+    #if GUARD_TESTING
+    static var restoreFailures = Int(ProcessInfo.processInfo.environment["GRINDSET_TEST_RESTORE_FAILURES"] ?? "0") ?? 0
+    #endif
     static func pmset(_ value: Bool? = nil) throws -> Bool {
+        #if GUARD_TESTING
+        let path = ProcessInfo.processInfo.environment["GRINDSET_TEST_STATE"]!
+        if let value {
+            if !value && restoreFailures > 0 { restoreFailures -= 1; throw GuardError.pmset }
+            try (value ? "1" : "0").write(toFile: path, atomically: true, encoding: .utf8)
+        }
+        return try String(contentsOfFile: path, encoding: .utf8) == "1"
+        #else
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
         process.arguments = value.map { ["-a", "disablesleep", $0 ? "1" : "0"] } ?? ["-g"]
@@ -25,6 +36,7 @@ enum LidGuard {
             throw GuardError.pmset
         }
         return line.trimmingCharacters(in: .whitespaces).hasSuffix("1")
+        #endif
     }
 
     enum GuardError: Error { case pmset, connection, credentials }
@@ -40,6 +52,10 @@ enum LidGuard {
     }
 
     static func battery() -> (Bool, Int?) {
+        #if GUARD_TESTING
+        if let percent = ProcessInfo.processInfo.environment["GRINDSET_TEST_BATTERY"].flatMap(Int.init) { return (true, percent) }
+        return (false, nil)
+        #else
         guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let sources = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else { return (false, nil) }
         let onBattery = (IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() as String?) == kIOPSBatteryPowerValue
@@ -50,11 +66,15 @@ enum LidGuard {
             return (onBattery, current * 100 / maximum)
         }
         return (onBattery, nil)
+        #endif
     }
 
     static func main() {
         let arguments = CommandLine.arguments
-        guard arguments.count == 4, geteuid() == 0,
+        #if !GUARD_TESTING
+        guard geteuid() == 0 else { exit(77) }
+        #endif
+        guard arguments.count == 4,
               let parent = Int32(arguments[1]), parent > 1,
               let owner = UInt32(arguments[2]), owner != 0 else { exit(64) }
         let path = arguments[3]

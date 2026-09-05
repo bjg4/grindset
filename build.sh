@@ -4,6 +4,8 @@ cd "$(dirname "$0")"
 mkdir -p .build dist
 swiftc LidLease.swift tests/LeaseTests.swift -o .build/lease-tests
 .build/lease-tests
+swiftc -D GUARD_TESTING -parse-as-library LidGuard.swift LidLease.swift -o .build/guard-tests
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 for arch in arm64 x86_64; do
   swiftc -O -parse-as-library -target "$arch-apple-macos13.0" main.swift LidSession.swift LidLease.swift -o ".build/Grindset-$arch"
   swiftc -O -parse-as-library -target "$arch-apple-macos13.0" LidGuard.swift LidLease.swift -o ".build/GrindsetLidGuard-$arch"
