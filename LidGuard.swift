@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import Darwin
 import IOKit.ps
 
@@ -59,7 +60,20 @@ enum LidGuard {
         guard var data = try? JSONSerialization.data(withJSONObject: object) else { return }
         data.append(10)
         data.withUnsafeBytes { bytes in
-            _ = Darwin.send(fd, bytes.baseAddress, bytes.count, 0)
+            var offset = 0
+            while offset < bytes.count {
+                // Status delivery must never hold up restoration when the app
+                // is frozen or no longer draining its socket.
+                let written = Darwin.send(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset, MSG_DONTWAIT)
+                if written > 0 { offset += written }
+                else if written < 0 && errno == EINTR { continue }
+                else {
+                    // A partial JSON line cannot be retried as a new message.
+                    // End the connection so both peers enter their recovery path.
+                    shutdown(fd, SHUT_RDWR)
+                    return
+                }
+            }
         }
     }
 
@@ -92,6 +106,11 @@ enum LidGuard {
         let path = arguments[3]
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { exit(71) }
+        #if GUARD_TESTING
+        if var size = ProcessInfo.processInfo.environment["GRINDSET_TEST_SEND_BUFFER"].flatMap(Int32.init) {
+            setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, socklen_t(MemoryLayout<Int32>.size))
+        }
+        #endif
         defer { close(fd) }
         signal(SIGPIPE, SIG_IGN)
         var address = sockaddr_un()
@@ -107,6 +126,10 @@ enum LidGuard {
             }
         }
         guard connected == 0 else { exit(69) }
+        // Set descriptor-level nonblocking mode as well as the per-send flag.
+        // Darwin Unix sockets can otherwise block a full status write.
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { exit(71) }
         var uid: uid_t = 0
         var gid: gid_t = 0
         var peerPID: pid_t = 0
@@ -170,7 +193,16 @@ enum LidGuard {
                             guard let message = try JSONSerialization.jsonObject(with: line) as? [String: Any],
                                   let command = message["command"] as? String else { throw GuardError.connection }
                             if command == "stop" { requested = true }
-                            else if command == "configure" { deadline = message["deadline"] as? Double }
+                            else if command == "configure" {
+                                // Only an absent/null deadline requests an indefinite lease.
+                                // A malformed timer must never silently disable its limit.
+                                if let value = message["deadline"], !(value is NSNull) {
+                                    guard let number = value as? NSNumber,
+                                          CFGetTypeID(number) != CFBooleanGetTypeID(),
+                                          number.doubleValue.isFinite else { throw GuardError.connection }
+                                    deadline = number.doubleValue
+                                } else { deadline = nil }
+                            }
                             else { throw GuardError.connection }
                         }
                     }
@@ -193,7 +225,12 @@ enum LidGuard {
                     if try !pmset(false) { break }
                 } catch {}
                 send(fd, "restoring", reason: "retrying-sleep-restore")
+                #if GUARD_TESTING
+                let delay = ProcessInfo.processInfo.environment["GRINDSET_TEST_RETRY_MICROSECONDS"].flatMap(UInt32.init) ?? 2_000_000
+                if delay > 0 { usleep(delay) }
+                #else
                 sleep(2)
+                #endif
             }
             send(fd, "restored", reason: stopReason)
         }

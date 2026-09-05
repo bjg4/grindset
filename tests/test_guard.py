@@ -96,12 +96,60 @@ class GuardTests(unittest.TestCase):
         self.client.sendall(b'not-json\n')
         self.restored('guard-error')
 
+    def test_string_deadline_cannot_become_an_indefinite_session(self):
+        self.start()
+        self.send(command='configure', deadline='tomorrow')
+        self.restored('guard-error')
+
+    def test_boolean_deadline_is_not_a_timestamp(self):
+        self.start()
+        self.send(command='configure', deadline=True)
+        self.restored('guard-error')
+
+    def test_array_deadline_is_rejected(self):
+        self.start()
+        self.send(command='configure', deadline=[])
+        self.restored('guard-error')
+
+    def test_split_command_preserves_the_deadline(self):
+        self.start()
+        message = json.dumps({'command': 'configure', 'deadline': time.time() - 1}).encode() + b'\n'
+        for byte in message:
+            self.client.sendall(bytes([byte]))
+        self.restored('expired')
+
+    def test_null_deadline_remains_an_explicit_indefinite_session(self):
+        self.start()
+        self.send(command='configure', deadline=None)
+        self.send(command='stop')
+        self.restored('stopped')
+
+    def test_oversized_unterminated_command_restores_sleep(self):
+        self.start()
+        self.client.sendall(b'x' * 9000)
+        self.restored('app-exited')
+
     def test_restore_is_retried_until_confirmed(self):
         self.start(GRINDSET_TEST_RESTORE_FAILURES='2')
         self.send(command='stop')
         self.assertEqual(self.read()['status'], 'restoring')
         self.assertEqual(self.state.read_text(), '1')
         self.restored('stopped')
+
+    def test_unresponsive_client_cannot_block_restore_retries(self):
+        self.start(GRINDSET_TEST_RESTORE_FAILURES='10000',
+                   GRINDSET_TEST_SEND_BUFFER='1024',
+                   GRINDSET_TEST_RETRY_MICROSECONDS='0')
+        self.send(command='stop')
+        # Deliberately never read the status messages. A blocking send would
+        # fill the socket and strand the guard before its final restore attempt.
+        try:
+            self.child.wait(timeout=7)
+        except subprocess.TimeoutExpired:
+            diagnostics = subprocess.run(['/usr/bin/sample', str(self.child.pid), '1', '1'],
+                                         capture_output=True, text=True, timeout=10)
+            self.fail('Guard did not restore under backpressure.\n' + diagnostics.stdout[:14000])
+        self.assertEqual(self.state.read_text(), '0')
 
     def test_helper_termination_signal_restores_sleep(self):
         self.start()
